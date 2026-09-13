@@ -97,5 +97,6 @@ test('all three ramp launches collect gems and land level with forward momentum'
     let airborne=false,landed=false;
     for(let i=0;i<6/DT;i++){s.step({0:s.ai(c)});if(c.airTime>.15)airborne=true;if(airborne&&c.grounded){assert.ok(Math.abs(c.pitch)<.25,`nose-first landing ${c.pitch}`);assert.ok(Math.hypot(c.vx,c.vz)>14);landed=true;break;}}
     assert.ok(landed);assert.ok(c.gems>0);
+    for(let i=0;i<120;i++){s.step({0:s.ai(c)});assert.ok(Math.hypot(c.vx,c.vz)>14,'lost momentum after touchdown');}assert.equal(c.hits,0);
   }
 });

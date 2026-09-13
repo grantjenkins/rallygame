@@ -115,11 +115,11 @@ class CannonDrivingWorld {
   }
   addCar(c){
     const body=new CANNON.Body({mass:1150,material:this.carMaterial,linearDamping:.015,angularDamping:.42});
-    body.addShape(new CANNON.Box(new CANNON.Vec3(1.03,.32,2.12)));
+    body.addShape(new CANNON.Box(new CANNON.Vec3(1.03,.25,2.12)));
     body.addShape(new CANNON.Box(new CANNON.Vec3(.83,.38,.94)),new CANNON.Vec3(0,.70,0));
     body.carId=c.id;body.kind='car';
     const vehicle=new CANNON.RaycastVehicle({chassisBody:body,indexRightAxis:0,indexForwardAxis:2,indexUpAxis:1});
-    for(const x of [-1.02,1.02])for(const z of [-1.44,1.4])vehicle.addWheel({radius:.46,chassisConnectionPointLocal:new CANNON.Vec3(x,.1,z),directionLocal:new CANNON.Vec3(0,-1,0),axleLocal:new CANNON.Vec3(-1,0,0),isFrontWheel:z>0,suspensionStiffness:40,suspensionRestLength:.46,maxSuspensionTravel:.36,dampingRelaxation:3.6,dampingCompression:4.4,maxSuspensionForce:24000,frictionSlip:1.8,rollInfluence:.38,customSlidingRotationalSpeed:-25,useCustomSlidingRotationalSpeed:true});
+    for(const x of [-1.02,1.02])for(const z of [-1.44,1.4])vehicle.addWheel({radius:.46,chassisConnectionPointLocal:new CANNON.Vec3(x,.1,z),directionLocal:new CANNON.Vec3(0,-1,0),axleLocal:new CANNON.Vec3(-1,0,0),isFrontWheel:z>0,suspensionStiffness:45,suspensionRestLength:.46,maxSuspensionTravel:.36,dampingRelaxation:3.6,dampingCompression:8,maxSuspensionForce:60000,frictionSlip:1.8,rollInfluence:.38,customSlidingRotationalSpeed:-25,useCustomSlidingRotationalSpeed:true});
     vehicle.addToWorld(this.world);this.rigs.push({body,vehicle});
     body.addEventListener('collide',e=>{
       const car=this.sim.cars[c.id],force=Math.abs(e.contact.getImpactVelocityAlongNormal());
@@ -160,7 +160,14 @@ class CannonDrivingWorld {
     // Rally air control acts through torque, preserving Cannon's free flight and impacts.
     // Dampen the rear-axle launch kick; aim for a slight nose-up landing attitude.
     const up=new CANNON.Vec3();body.vectorToWorldFrame(new CANNON.Vec3(0,1,0),up);
-    if(!c.grounded&&c.airTime>.06&&up.y>.25){const right=new CANNON.Vec3();body.vectorToWorldFrame(new CANNON.Vec3(1,0,0),right);const pitch=Math.atan2(-forward.y,Math.hypot(forward.x,forward.z)),rate=body.angularVelocity.dot(right);body.applyTorque(right.scale(clamp((-0.07-pitch)*11000-rate*6000,-11000,11000)));}
+    if(!c.grounded&&c.airTime>.06&&up.y>.25){
+      const right=new CANNON.Vec3();body.vectorToWorldFrame(new CANNON.Vec3(1,0,0),right);
+      const pitch=Math.atan2(-forward.y,Math.hypot(forward.x,forward.z)),rate=body.angularVelocity.dot(right),targetS=c.s+Math.hypot(c.vx,c.vz)*.2;
+      const grade=(this.track.height(targetS+3,c.lane)-this.track.height(targetS-3,c.lane))/6;
+      const targetPitch=clamp(-Math.atan(grade)-.04,-.3,.18),targetRoll=-Math.atan(this.track.sample(targetS).bank),roll=Math.atan2(right.y,up.y);
+      body.applyTorque(right.scale(clamp((targetPitch-pitch)*11000-rate*6000,-11000,11000)));
+      body.applyTorque(forward.scale(clamp((targetRoll-roll)*9000-body.angularVelocity.dot(forward)*4500,-9000,9000)));
+    }
     if(c.grounded){const down=new CANNON.Vec3();body.vectorToWorldFrame(new CANNON.Vec3(0,-Math.min(2400,velocity*velocity*1.4),0),down);body.applyForce(down);}
   }
   sync(c){
@@ -456,19 +463,20 @@ function timeFormat(t){if(!Number.isFinite(t))return '—';const ms=Math.floor(t
 function setVisible(id,yes){$(id).classList.toggle('hidden',!yes);}
 function menuVisible(yes){for(const id of ['menu','track-card','menu-footer'])setVisible(id,yes);document.body.classList.toggle('playing',!yes);setVisible('menu-button',!yes);}
 function resetSimulation(){carMeshes[0].userData.paint.color.set(CAR_COLORS[settings.color]);sim=new RallySimulation(track,settings);carMeshes.forEach((m,i)=>m.visible=i<sim.cars.length);rebuildPickups();}
-function startRace(){document.body.classList.remove('replaying','result-open');resetSimulation();phase='countdown';countdown=3.3;accumulator=0;recording=[];recordTimer=0;clearInput();menuVisible(false);setVisible('hud',true);setVisible('modal',false);setVisible('replay-bar',false);setVisible('countdown',true);cameraMode=0;orbit.enabled=false;const savedBest=storage.get('best:'+bestKey());cachedBestTime=savedBest?.time??null;ghostData=$('ghost-toggle').checked?savedBest:null;if(!ghostData?.frames?.length)ghostData=null;ghostMesh.visible=!!ghostData;recordFrame();updateHud();updateCarMeshes();updateCamera(1,true);}
+function startRace(){document.body.classList.remove('replaying','result-open');resetSimulation();phase='countdown';countdown=3.3;accumulator=0;recording=[];recordTimer=0;clearInput();menuVisible(false);setVisible('hud',true);setVisible('modal',false);setVisible('replay-bar',false);setVisible('countdown',true);cameraMode=0;cameraLabel();orbit.enabled=false;const savedBest=storage.get('best:'+bestKey());cachedBestTime=savedBest?.time??null;ghostData=$('ghost-toggle').checked?savedBest:null;if(!ghostData?.frames?.length)ghostData=null;ghostMesh.visible=!!ghostData;recordFrame();updateHud();updateCarMeshes();updateCamera(1,true);}
 $('start').onclick=startRace;
 let pausedFrom='racing';
 function modal(eyebrow,title,body,actions){$('modal-eyebrow').textContent=eyebrow;$('modal-title').textContent=title;$('modal-body').innerHTML=body;$('modal-actions').replaceChildren();actions.forEach(([text,fn,primary])=>{const b=document.createElement('button');b.textContent=text;b.onclick=fn;if(primary)b.className='primary';$('modal-actions').appendChild(b);});setVisible('modal',true);}
 function togglePause(){if(phase==='paused'){phase=pausedFrom;setVisible('modal',false);return;}if(!['racing','countdown'].includes(phase))return;pausedFrom=phase;phase='paused';clearInput();modal('TAKE A BREATHER','PAUSED.',`<p>WASD / arrows to drive · Space to drift · Shift to boost<br>C switches cameras · R recovers your car<br>Overview: drag to orbit, scroll or pinch to zoom.</p><p>Mint gems above jumps give four seconds of speed. Orange refills boost, blue shields impacts, and green repairs your car.</p>`,[['RESUME ↗',togglePause,true],['RESTART SESSION',startRace],['BACK TO PADDOCK',backToMenu]]);}
 function backToMenu(){if(phase==='finishing')saveReplay();document.body.classList.remove('replaying','result-open');if(phase==='replay'&&replayMenuSettings){Object.assign(settings,replayMenuSettings);replayMenuSettings=null;}phase='menu';menuVisible(true);for(const id of ['hud','modal','countdown','replay-bar'])setVisible(id,false);ghostMesh.visible=false;orbit.enabled=false;resetSimulation();clearInput();$('watch-menu').disabled=!lastReplay;}
-function switchCamera(){if(phase==='menu')return;cameraMode=(cameraMode+1)%(sim.cars[0].finished?4:3);orbit.enabled=cameraMode===2;if(orbit.enabled){const c=sim.cars[0];camera.position.set(c.x+40,c.y+65,c.z-40);orbit.target.set(c.x,c.y,c.z);orbitAnchor.set(c.x,c.y,c.z);orbit.enablePan=false;camera.up.set(0,1,0);camera.fov=60;camera.updateProjectionMatrix();orbit.update();}$('camera').innerHTML=`◉ <span>${['CHASE','DRIVER','OVERVIEW','FINISH'][cameraMode]}</span><kbd>C</kbd>`;}
+function cameraLabel(){$('camera').innerHTML=`◉ <span>${['CHASE','DRIVER','OVERVIEW','FINISH'][cameraMode]}</span><kbd>C</kbd>`;}
+function switchCamera(){if(phase==='menu')return;cameraMode=(cameraMode+1)%(sim.cars[0].finished?4:3);orbit.enabled=cameraMode===2;if(orbit.enabled){const c=sim.cars[0];camera.position.set(c.x+40,c.y+65,c.z-40);orbit.target.set(c.x,c.y,c.z);orbitAnchor.set(c.x,c.y,c.z);orbit.enablePan=false;camera.up.set(0,1,0);camera.fov=60;camera.updateProjectionMatrix();orbit.update();}cameraLabel();}
 function recordFrame(){const c=sim.cars;recording.push([+sim.time.toFixed(3),...c.flatMap(c=>[c.x,c.y,c.z,c.heading,c.pitch,c.roll,Math.hypot(c.vx,c.vz),c.lap,c.progress,c.qx,c.qy,c.qz,c.qw,...c.wheelState.map(w=>w.suspensionLength),...c.wheelState.map(w=>w.rotation),c.wheelState[1].steering].map(v=>+v.toFixed(4)))]);}
 function saveReplay(){recordFrame();lastReplay={version:TRACK_VERSION,options:{...settings},duration:sim.time,playerFinishTime:sim.cars[0].finishTime,results:sim.cars.map(c=>({finishTime:c.finishTime,lapTimes:[...c.lapTimes],achievements:[...c.achievements],driftDistance:c.driftDistance,totalAir:c.totalAir})),frames:[...recording]};persistReplay(lastReplay).then(saved=>{if(!saved)toast('Replay kept for this session; browser storage is full.');});}
 function showFinishPanel(replaying=false){
   const c=sim.cars[0],result=replaying?lastReplay.results?.[0]:c,finishTime=result?.finishTime??lastReplay?.playerFinishTime??sim.time,rank=sim.standings().findIndex(c=>c.id===0)+1;
   const waiting=sim.cars.filter(c=>!c.finished).length;
-  document.body.classList.add('result-open');cameraMode=3;orbit.enabled=false;
+  document.body.classList.add('result-open');cameraMode=3;cameraLabel();orbit.enabled=false;
   modal(replaying?'RACE REPLAY':'CHEQUERED FLAG',settings.mode==='trial'?'TIME SET.':rank===1?'VICTORY.':`P${rank}. FINISHED.`,
     `<div class="result-row"><span>Your time</span><strong>${timeFormat(finishTime)}</strong></div>${(result?.lapTimes||[]).map((t,i)=>`<div class="result-row"><span>Lap ${i+1}</span><span>${timeFormat(t)}</span></div>`).join('')}<p id="finish-status">${waiting?`${waiting} rival${waiting===1?'':'s'} still racing — watch the finish.`:'All cars have finished.'}</p><p>${(result?.achievements||[]).join(' · ')}</p>`,
     replaying?[['CAMERA',switchCamera],['BACK TO PADDOCK',backToMenu]]:[['CAMERA / WATCH THE FIELD',switchCamera],['WATCH REPLAY',()=>{if(phase==='finishing')saveReplay();watchReplay();}],['RACE AGAIN ↗',()=>{if(phase==='finishing')saveReplay();startRace();},true],['BACK TO PADDOCK',backToMenu]]);
@@ -480,9 +488,9 @@ function finishRace(){
     if(pb){cachedBestTime=c.finishTime;storage.set('best:'+bestKey(),{time:c.finishTime,frames:recording.filter(f=>f[0]<=c.finishTime+.01).map(f=>f.slice(0,1+FRAME_STRIDE)),version:TRACK_VERSION});}
     const awards=storage.get('achievements',[]);storage.set('achievements',[...new Set([...awards,...c.achievements])]);
   }
-  showFinishPanel();
+  showFinishPanel();const replayButton=[...$('modal-actions').children].find(b=>b.textContent==='WATCH REPLAY');if(replayButton){replayButton.disabled=!sim.finished;if(!sim.finished)replayButton.textContent='REPLAY / WAITING FOR THE FIELD';}
 }
-function watchReplay(){if(!lastReplay)return;document.body.classList.remove('result-open');document.body.classList.add('replaying');replayMenuSettings={...settings};Object.assign(settings,lastReplay.options);cachedBestTime=storage.get('best:'+bestKey())?.time??null;carMeshes[0].userData.paint.color.set(CAR_COLORS[settings.color]);resetSimulation();phase='replay';replayTime=0;replayRate=1;replayPaused=false;$('replay-pause').textContent='Ⅱ';$('replay-pause').setAttribute('aria-label','Pause replay');$('replay-speed').textContent='1×';cameraMode=0;orbit.enabled=false;menuVisible(false);setVisible('modal',false);setVisible('hud',true);setVisible('countdown',false);setVisible('replay-bar',true);ghostMesh.visible=false;}
+function watchReplay(){if(!lastReplay)return;document.body.classList.remove('result-open');document.body.classList.add('replaying');replayMenuSettings={...settings};Object.assign(settings,lastReplay.options);cachedBestTime=storage.get('best:'+bestKey())?.time??null;carMeshes[0].userData.paint.color.set(CAR_COLORS[settings.color]);resetSimulation();phase='replay';replayTime=0;replayRate=1;replayPaused=false;$('replay-pause').textContent='Ⅱ';$('replay-pause').setAttribute('aria-label','Pause replay');$('replay-speed').textContent='1×';cameraMode=0;cameraLabel();orbit.enabled=false;menuVisible(false);setVisible('modal',false);setVisible('hud',true);setVisible('countdown',false);setVisible('replay-bar',true);ghostMesh.visible=false;}
 $('replay-pause').onclick=()=>{replayPaused=!replayPaused;$('replay-pause').textContent=replayPaused?'▶':'Ⅱ';$('replay-pause').setAttribute('aria-label',replayPaused?'Play replay':'Pause replay');};
 $('watch-menu').onclick=watchReplay;$('exit-replay').onclick=backToMenu;$('replay-speed').onclick=()=>{replayRate=replayRate===1?2:replayRate===2?.5:1;$('replay-speed').textContent=`${replayRate}×`;};$('replay-scrub').oninput=e=>replayTime=Number(e.target.value)/1000*lastReplay.duration;
 function framePair(frames,t){let lo=0,hi=frames.length-1;while(lo<hi-1){const mid=(lo+hi)>>1;if(frames[mid][0]<=t)lo=mid;else hi=mid;}const a=frames[lo],b=frames[Math.min(lo+1,frames.length-1)];return {a,b,f:clamp((t-a[0])/Math.max(.001,b[0]-a[0]),0,1)};}
@@ -499,7 +507,7 @@ const lookTarget=new THREE.Vector3(),desiredCamera=new THREE.Vector3(),orbitAnch
 function updateCamera(dt,snap=false){
   const c=sim.cars[0];
   if(phase==='menu'){const p=track.at(-8,-3.5);desiredCamera.set(p.x+17+Math.sin(renderTime*.055)*1.5,p.y+6.3,p.z-17);camera.position.lerp(desiredCamera,snap?1:1-Math.exp(-dt*2));camera.lookAt(p.x-4,p.y-.4,p.z+11);camera.fov=53;camera.updateProjectionMatrix();return;}
-  if(cameraMode===3){const p=track.at(8,23),focus=track.at(0,0);camera.up.set(0,1,0);desiredCamera.set(p.x,p.y+10,p.z);camera.position.lerp(desiredCamera,snap?1:1-Math.exp(-dt*4));camera.lookAt(focus.x,focus.y+1,focus.z);camera.fov=65;camera.updateProjectionMatrix();return;}
+  if(cameraMode===3){const p=track.at(-32,30),focus=track.at(-5,0);camera.up.set(0,1,0);desiredCamera.set(p.x,p.y+20,p.z);camera.position.lerp(desiredCamera,snap?1:1-Math.exp(-dt*4));camera.lookAt(focus.x,focus.y+1,focus.z);camera.fov=65;camera.updateProjectionMatrix();return;}
   if(cameraMode===2){lookTarget.set(c.x,c.y,c.z);desiredCamera.copy(lookTarget).sub(orbitAnchor);camera.position.add(desiredCamera);orbit.target.add(desiredCamera);orbitAnchor.copy(lookTarget);orbit.update();return;}
   const fx=Math.sin(c.heading),fz=Math.cos(c.heading),speed=Math.hypot(c.vx,c.vz);
   if(cameraMode===1){const m=carMeshes[0];desiredCamera.set(-.39,1.05,.15).applyMatrix4(m.matrixWorld);camera.position.copy(desiredCamera);lookTarget.set(-.39,.55,24).applyMatrix4(m.matrixWorld);camera.up.set(0,1,0).applyQuaternion(m.quaternion);camera.lookAt(lookTarget);camera.fov=80;}

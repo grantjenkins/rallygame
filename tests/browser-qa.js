@@ -5,8 +5,8 @@ document.body.appendChild(qa);
 function button(label,action){const b=document.createElement('button');b.textContent=label;b.style.cssText='background:#436349;color:white;padding:7px;font:10px Arial';b.onclick=action;qa.appendChild(b);return b;}
 const status=document.createElement('span');status.style.padding='7px';qa.appendChild(status);
 button('QA: drive session',()=>{
-  const d=window.RallyDebug;d.startRace();d.setPhase('testing');let steps=0;
-  const run=()=>{d.step(180,true);steps+=180;status.textContent=`${d.sim.time.toFixed(1)}s / ${d.sim.cars[0].passedGates} gates`;if(d.sim.finished){d.finishRace();status.textContent='QA: finished';}else if(steps<120*650)setTimeout(run,0);else status.textContent='QA: timeout';};run();
+  const d=window.RallyDebug;d.startRace();d.setPhase('testing');let steps=0,playerReported=false;
+  const run=()=>{d.step(60,true);steps+=60;if(d.sim.cars[0].finished&&!playerReported){d.finishRace();d.setPhase('testing');playerReported=true;}status.textContent=`${d.sim.time.toFixed(1)}s / ${d.sim.cars[0].passedGates} gates`;if(d.sim.finished){d.finishRace();status.textContent='QA: finished';}else if(steps<120*650)setTimeout(run,0);else status.textContent='QA: timeout';};run();
 });
 button('QA: roof',()=>{const d=window.RallyDebug,c=d.sim.cars[0];d.sim.teleport(c,{roll:Math.PI,pitch:0,rollV:0,pitchV:0,vx:0,vz:0,vy:0,y:d.track.groundHeight(c.x,c.z)+1.1});});
 button('QA: inspect jump',()=>{const d=window.RallyDebug,c=d.sim.cars[0],r=d.track.ramps[0],p=d.track.at(r.s-24,r.lane);d.sim.teleport(c,{x:p.x,y:d.track.groundHeight(p.x,p.z)+.7,z:p.z,s:r.s-24,lane:r.lane,heading:p.heading,vx:Math.sin(p.heading)*29,vz:Math.cos(p.heading)*29,vy:0});});
