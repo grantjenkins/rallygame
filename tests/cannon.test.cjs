@@ -67,3 +67,35 @@ test('human multiplayer slots use identical grip regardless of slot number',()=>
   for(const rig of s.physics.rigs)assert.equal(rig.vehicle.wheelInfos[0].frictionSlip,grip);
   for(const c of s.cars)assert.equal(c.isAI,false);
 });
+
+test('recovery moves a trapped car beside the pit without advancing course progress',()=>{
+  const s=new RallySimulation(track,{mode:'trial'}),c=s.cars[0];
+  for(const pit of track.pits){const p=track.at(pit.s,pit.lane);s.teleport(c,{x:p.x,y:p.y+.7,z:p.z});const progress=c.progress;s.recover(c,true);
+    assert.ok(Math.abs(c.lane-pit.lane)>7);assert.ok(Math.abs(track.delta(c.s,pit.s))<.1);assert.equal(c.progress,progress);assert.equal(c.passedGates,0);}
+});
+
+
+test('the field keeps racing after the player finishes and the player time stays fixed',()=>{
+  const s=new RallySimulation(track,{mode:'race'}),c=s.cars[0];c.finished=true;c.finishTime=1;c.lap=1;s.time=1;s.finishOrder.push(0);
+  const before=s.cars[1].z;step(s,240);assert.equal(s.finished,false);assert.ok(Math.abs(s.cars[1].z-before)>3);assert.equal(c.finishTime,1);
+  for(const rival of s.cars.slice(1)){rival.finished=true;rival.finishTime=s.time;rival.lap=1;}step(s,1);assert.equal(s.finished,true);
+});
+
+test('recovery across the moguls clears the chassis and lets the car drive away',()=>{
+  for(const lane of [-8,-4,0,4,8]){
+    const s=new RallySimulation(track,{mode:'trial'}),c=s.cars[0],p=track.at(track.moguls[0]+28,lane);
+    s.teleport(c,{x:p.x,y:track.groundHeight(p.x,p.z)+.6,z:p.z,heading:p.heading});s.recover(c,true);const start=c.s;
+    for(let i=0;i<6/DT;i++)s.step({0:s.ai(c)});
+    assert.ok(track.delta(c.s,start)>30,`stuck after recovery from lane ${lane}`);assert.ok(Math.hypot(c.vx,c.vz)>7);
+  }
+});
+
+test('all three ramp launches collect gems and land level with forward momentum',()=>{
+  for(const r of track.ramps){
+    const s=new RallySimulation(track,{mode:'trial'}),c=s.cars[0],p=track.at(r.s-40,r.lane);
+    s.teleport(c,{x:p.x,y:track.groundHeight(p.x,p.z)+.8,z:p.z,heading:p.heading,vx:Math.sin(p.heading)*26,vz:Math.cos(p.heading)*26});
+    let airborne=false,landed=false;
+    for(let i=0;i<6/DT;i++){s.step({0:s.ai(c)});if(c.airTime>.15)airborne=true;if(airborne&&c.grounded){assert.ok(Math.abs(c.pitch)<.25,`nose-first landing ${c.pitch}`);assert.ok(Math.hypot(c.vx,c.vz)>14);landed=true;break;}}
+    assert.ok(landed);assert.ok(c.gems>0);
+  }
+});

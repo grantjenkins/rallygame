@@ -9,3 +9,11 @@
 @media(min-width:801px){.menu{max-height:calc(100dvh - 145px);overflow:auto;scrollbar-width:thin;scrollbar-color:#fa6837 transparent;padding-right:5px}}
 
 body.replaying #touch-controls,body.replaying .drive-tools{display:none!important}body.replaying .telemetry,body.replaying .minimap{bottom:95px}
+
+/* Results stay alongside the live circuit instead of obscuring the finish. */
+body.result-open .modal{inset:110px 3% auto auto;width:300px;display:block;background:none;backdrop-filter:none;pointer-events:none}
+body.result-open .modal>section{width:100%;max-width:none;padding:20px;background:#13251eea;pointer-events:auto}
+body.result-open .modal h2{font-size:42px;margin:9px 0 12px}body.result-open .modal button{padding:9px;font-size:10px;margin-top:6px}
+body.result-open .modal p{font-size:11px;margin:10px 0}body.result-open .result-row{font-size:11px;padding:7px 0}
+body.result-open #touch-controls{display:none!important}
+@media(max-width:800px){body.result-open .modal{top:160px;right:4%;width:205px}body.result-open .modal>section{padding:12px}body.result-open .modal h2{font-size:32px}body.result-open .modal .result-row:not(:first-child){display:none}body.result-open .modal p{font-size:10px}}

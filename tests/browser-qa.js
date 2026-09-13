@@ -12,3 +12,7 @@ button('QA: roof',()=>{const d=window.RallyDebug,c=d.sim.cars[0];d.sim.teleport(
 button('QA: inspect jump',()=>{const d=window.RallyDebug,c=d.sim.cars[0],r=d.track.ramps[0],p=d.track.at(r.s-24,r.lane);d.sim.teleport(c,{x:p.x,y:d.track.groundHeight(p.x,p.z)+.7,z:p.z,s:r.s-24,lane:r.lane,heading:p.heading,vx:Math.sin(p.heading)*29,vz:Math.cos(p.heading)*29,vy:0});});
 
 button('QA: report',()=>{const d=window.RallyDebug;status.textContent=d.sim.cars.length+' cars / '+(d.ghostReady?'ghost loaded':'no ghost')+' / '+d.phase+' / CANNON '+d.sim.physics.world.bodies.length+' bodies';});
+
+button('QA: car front',()=>window.RallyDebug.inspectCar(1));
+button('QA: car rear',()=>window.RallyDebug.inspectCar(-1));
+button('QA: finish player',()=>{const d=window.RallyDebug,c=d.sim.cars[0];c.finished=true;c.finishTime=d.sim.time;c.lap=d.settings.laps;c.progress=c.lap*d.track.length;d.sim.finishOrder.push(0);d.finishRace();});
