@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#171d1a">
+  <title>Dustline — Alpine Rally</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/" } }
+  </script>
+</head>
+<body>
+  <div id="game" aria-label="3D dirt rally game"></div>
+  <div class="vignette"></div>
+  <header class="topbar">
+    <a class="brand" href="#" aria-label="Dustline home"><span class="brand-icon">///</span> DUSTLINE<span class="brand-sub">RALLY SPORT</span></a>
+    <div class="top-tools">
+      <span class="live-label"><i></i> ALPINE RIDGE</span>
+      <button id="sound" class="icon-button" aria-label="Toggle audio" title="Audio (M)">♫ <span>OFF</span></button>
+      <button id="fullscreen" class="icon-button" aria-label="Toggle fullscreen" title="Fullscreen">⛶</button>
+      <button id="menu-button" class="icon-button hidden" aria-label="Pause game">Ⅱ</button>
+    </div>
+  </header>
+
+  <main id="menu" class="menu">
+    <div class="eyebrow"><span></span> THE MOUNTAIN IS YOURS</div>
+    <h1>LEAVE NOTHING<br>BUT <em>DUST.</em></h1>
+    <p class="intro">Six cars. No asphalt. Find your line through<br class="desktop"> the wild side of Alpine Ridge.</p>
+    <section class="race-setup" aria-label="Race setup">
+      <div class="section-label"><span>01 / CHOOSE YOUR SESSION</span><span class="tiny-mark">↗</span></div>
+      <div class="segmented modes" role="group" aria-label="Game mode">
+        <button data-mode="race" class="selected"><strong>RACE</strong><small>YOU + 5 RIVALS</small></button>
+        <button data-mode="trial"><strong>TIME TRIAL</strong><small>YOU VS. THE CLOCK</small></button>
+      </div>
+      <div class="setup-row">
+        <label>DIFFICULTY<select id="difficulty"><option value="basic">Basic</option><option value="intermediate" selected>Intermediate</option><option value="advanced">Advanced</option></select></label>
+        <div><label>RACE LENGTH</label><div class="segmented laps" role="group" aria-label="Lap count"><button data-laps="1" class="selected">1 LAP</button><button data-laps="3">3 LAPS</button></div></div>
+      </div>
+      <div class="garage-row"><div><span class="section-label">YOUR MACHINE</span><strong>RDX / TURBO 4WD</strong></div><div id="colors" class="colors" role="group" aria-label="Car color"><button data-color="0" class="selected" style="--swatch:#fa6837" aria-label="Orange car"></button><button data-color="1" style="--swatch:#8ec7bc" aria-label="Mint car"></button><button data-color="2" style="--swatch:#e9dfc8" aria-label="Ivory car"></button><button data-color="3" style="--swatch:#70a9e8" aria-label="Blue car"></button></div></div>
+      <button id="start" class="primary" disabled><span id="start-label">BUILDING THE RIDGE…</span><span>↗</span></button>
+      <div class="menu-extras"><label class="check"><input id="ghost-toggle" type="checkbox" checked> Personal-best ghost</label><button id="watch-menu" class="text-button" disabled>↺ Last race</button></div>
+    </section>
+    <div class="keyboard-hint"><span>W A S D</span> DRIVE <b>·</b> <span>SPACE</span> DRIFT <b>·</b> <span>C</span> CAMERA</div>
+  </main>
+
+  <aside id="track-card" class="track-card"><div class="section-label">STAGE 01 <span>36° 42′ N</span></div><h2>ALPINE RIDGE<span>DIRT CIRCUIT</span></h2><canvas id="preview-map" width="330" height="180" aria-label="Alpine Ridge circuit map"></canvas><div class="track-stats"><div><strong id="track-length">2.8</strong><small>KILOMETRES</small></div><div><strong>100<em>%</em></strong><small>DIRT</small></div><div><strong>06</strong><small>GRID SLOTS</small></div></div><div class="track-tags">BANKED TURNS <i>•</i> BIG AIR <i>•</i> MOGULS</div></aside>
+  <footer id="menu-footer"><span>BUILT FOR THE ROAD LESS TAKEN.</span><span>LOCAL SINGLE PLAYER <i>●</i> THREE.JS R185</span></footer>
+
+  <div id="hud" class="hidden">
+    <div class="race-info"><div><small>POSITION</small><strong id="position">1<span>/ 6</span></strong></div><div><small>LAP</small><strong id="lap">1<span>/ 1</span></strong></div><div class="time-block"><small>SESSION TIME</small><strong id="time">00:00.000</strong><span id="best-time">BEST —</span></div></div>
+    <div id="leaderboard" class="leaderboard"></div>
+    <div class="minimap"><div class="section-label">ALPINE RIDGE <span id="sector">START / FINISH</span></div><canvas id="minimap" width="260" height="180"></canvas></div>
+    <div class="telemetry"><div id="power-status">4WD <span>•</span> GRAVEL SPEC</div><div class="speed"><strong id="speed">000</strong><span>KM/H<br><b id="gear">N</b></span></div><div class="rpm"><i id="rpm"></i></div><div class="nitro-label"><span>BOOST <kbd>SHIFT</kbd></span><span id="nitro-percent">100%</span></div><div class="nitro"><i id="nitro"></i></div></div>
+    <div class="drive-tools"><button id="camera">◉ <span>CHASE</span><kbd>C</kbd></button><button id="reset">↻ RECOVER <kbd>R</kbd></button></div>
+    <div id="touch-controls"><div class="touch-steer"><button data-input="left" aria-label="Steer left">◀</button><button data-input="right" aria-label="Steer right">▶</button></div><div class="touch-pedals"><button data-input="drift">DRIFT</button><button data-input="boost">BOOST</button><button data-input="brake">BRAKE</button><button data-input="throttle" class="gas">GAS ↑</button></div></div>
+  </div>
+  <div id="countdown" class="hidden" aria-live="assertive"></div>
+  <div id="toast" class="toast hidden" role="status"></div>
+  <div id="replay-bar" class="replay-bar hidden"><span><i></i> RACE REPLAY</span><button id="replay-pause" aria-label="Pause replay">Ⅱ</button><button id="replay-speed">1×</button><input id="replay-scrub" type="range" min="0" max="1000" value="0" aria-label="Replay timeline"><button id="replay-camera">CAMERA</button><button id="exit-replay">EXIT ↗</button></div>
+  <div id="modal" class="modal hidden"><section><div id="modal-eyebrow" class="eyebrow">TAKE A BREATHER</div><h2 id="modal-title">PAUSED.</h2><div id="modal-body"></div><div id="modal-actions"></div></section></div>
+  <div id="load-error" class="hidden" role="alert">The engine couldn’t start. Check your internet connection and WebGL support, then reload.</div>
+  <script type="module" src="script.js" onerror="document.getElementById('load-error').classList.remove('hidden')"></script>
+</body>
+</html>

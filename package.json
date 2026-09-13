@@ -1,0 +1,11 @@
+{
+  "name": "dustline-rally",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node tools/serve.cjs",
+    "test": "node --test tests/simulation.test.cjs",
+    "check": "node --check script.js"
+  }
+}
