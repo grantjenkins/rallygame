@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import * as CANNON from "cannon-es";
 
 // SIMULATION_CORE_BEGIN
 // No DOM, renderer, audio, or wall clock in this section. A future authoritative
@@ -11,7 +12,7 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const wrap = (v, n) => ((v % n) + n) % n;
 const angle = a => wrap(a + Math.PI, TAU) - Math.PI;
 const DT = 1 / 120;
-const TRACK_VERSION = 'alpine-5';
+const TRACK_VERSION = 'alpine-cannon-1';
 const CAR_COLORS = ['#fa6837', '#8ec7bc', '#e9dfc8', '#70a9e8', '#d5b55e', '#b998d2'];
 const DRIVERS = ['YOU', 'S. MOREAU', 'K. TANAKA', 'A. COSTA', 'J. REED', 'M. NOVAK'];
 function randomGenerator(seed = 78219) {
@@ -60,9 +61,129 @@ class DirtTrack {
     return result;
   }
   surface(x,z,hint){const n=this.nearest(x,z,hint);return {...n,y:this.height(n.s,clamp(n.lane,-this.width/2,this.width/2))};}
+  buildCollider(){
+    if(this.collider)return this.collider;
+    // A regular grid supports both Cannon's wheel rays AND box/roof contacts.
+    // Cache immutable height data per track; every race receives a fresh World.
+    const minX=-310,maxZ=310,cell=2,nx=341,nz=326,data=[];
+    for(let ix=0;ix<nx;ix++){
+      const row=[];let hint;
+      for(let iz=0;iz<nz;iz++){
+        const x=minX+ix*cell,z=maxZ-iz*cell,n=this.nearest(x,z,hint);hint=n.s;
+        const distance=Math.sqrt(n.d),edge=this.height(n.s,clamp(n.lane,-14,14));
+        const earth=-3+8*Math.sin(x*.014)*Math.cos(z*.009)+3*Math.sin(z*.03+x*.009);
+        row.push(distance<14?this.height(n.s,n.lane):lerp(edge,earth,clamp((distance-14)/30,0,1)));
+      }
+      data.push(row);
+    }
+    this.collider={minX,maxZ,cell,data};return this.collider;
+  }
+  groundHeight(x,z){
+    const {minX,maxZ,cell,data}=this.buildCollider(),u=clamp((x-minX)/cell,0,data.length-1.00001),v=clamp((maxZ-z)/cell,0,data[0].length-1.00001),ix=Math.floor(u),iz=Math.floor(v),a=u-ix,b=v-iz;
+    return a+b<=1?data[ix][iz]*(1-a-b)+data[ix+1][iz]*a+data[ix][iz+1]*b:data[ix+1][iz+1]*(a+b-1)+data[ix][iz+1]*(1-a)+data[ix+1][iz]*(1-b);
+  }
   sector(s){const t=wrap(s,this.length)/this.length;return t<.10?'PINE STRAIGHT':t<.23?'SKYLINE JUMP':t<.36?'QUARRY BEND':t<.52?'HIGH RIDGE':t<.63?'THE HOLLOW':t<.71?'MOGUL FIELD':t<.84?'SUMMIT LEAP':'HOME RUN';}
 }
 const DIFFICULTY={basic:{speed:25,grip:1,look:15},intermediate:{speed:34,grip:1.08,look:20},advanced:{speed:42,grip:1.14,look:24}};
+
+class CannonDrivingWorld {
+  constructor(sim){
+    this.sim=sim;this.track=sim.track;this.rigs=[];
+    this.world=new CANNON.World({gravity:new CANNON.Vec3(0,-9.81,0),allowSleep:false});
+    this.world.broadphase=new CANNON.SAPBroadphase(this.world);
+    this.world.broadphase.axisIndex=0;this.world.solver.iterations=12;this.world.solver.tolerance=1e-7;
+    this.world.defaultContactMaterial.friction=.35;this.world.defaultContactMaterial.restitution=.08;
+    this.carMaterial=new CANNON.Material('rally chassis');
+    this.groundMaterial=new CANNON.Material('dirt');this.wallMaterial=new CANNON.Material('barrier');
+    for(const [other,friction,restitution]of [[this.groundMaterial,.45,.04],[this.wallMaterial,.25,.12],[this.carMaterial,.3,.12]])this.world.addContactMaterial(new CANNON.ContactMaterial(this.carMaterial,other,{friction,restitution,contactEquationStiffness:1e7,contactEquationRelaxation:4}));
+    const grid=this.track.buildCollider();
+    this.ground=new CANNON.Body({mass:0,material:this.groundMaterial});
+    this.ground.addShape(new CANNON.Heightfield(grid.data,{elementSize:grid.cell}));
+    this.ground.position.set(grid.minX,0,grid.maxZ);this.ground.quaternion.setFromEuler(-Math.PI/2,0,0);this.ground.kind='terrain';this.world.addBody(this.ground);
+    // Group nearby wall segments into small compound bodies for broadphase efficiency.
+    this.walls=[];let wall;
+    for(let s=0,index=0;s<this.track.length;s+=6,index++){
+      if(index%12===0){wall=new CANNON.Body({mass:0,material:this.wallMaterial});const p=this.track.at(s);wall.position.set(p.x,p.y,p.z);wall.kind='barrier';this.walls.push(wall);this.world.addBody(wall);}
+      for(const side of [-1,1]){
+        const p=this.track.at(s,side*14.5),a=this.track.at(s-3,side*14.5),b=this.track.at(s+3,side*14.5);
+        const pitch=-Math.atan2(b.y-a.y,6),roll=Math.atan(-this.track.sample(s).bank);
+        wall.addShape(new CANNON.Box(new CANNON.Vec3(.40,.58,3.15)),new CANNON.Vec3(p.x-wall.position.x,p.y+.58-wall.position.y,p.z-wall.position.z),new CANNON.Quaternion().setFromEuler(pitch,p.heading,roll,'YXZ'));
+      }
+    }
+    sim.cars.forEach(c=>this.addCar(c));
+  }
+  addCar(c){
+    const body=new CANNON.Body({mass:1150,material:this.carMaterial,linearDamping:.015,angularDamping:.32});
+    body.addShape(new CANNON.Box(new CANNON.Vec3(1.03,.32,2.12)));
+    body.addShape(new CANNON.Box(new CANNON.Vec3(.83,.38,.94)),new CANNON.Vec3(0,.70,0));
+    body.carId=c.id;body.kind='car';
+    const vehicle=new CANNON.RaycastVehicle({chassisBody:body,indexRightAxis:0,indexForwardAxis:2,indexUpAxis:1});
+    for(const x of [-1.02,1.02])for(const z of [-1.44,1.4])vehicle.addWheel({radius:.46,chassisConnectionPointLocal:new CANNON.Vec3(x,.1,z),directionLocal:new CANNON.Vec3(0,-1,0),axleLocal:new CANNON.Vec3(-1,0,0),isFrontWheel:z>0,suspensionStiffness:48,suspensionRestLength:.34,maxSuspensionTravel:.23,dampingRelaxation:4.5,dampingCompression:5.8,maxSuspensionForce:24000,frictionSlip:1.8,rollInfluence:.38,customSlidingRotationalSpeed:-25,useCustomSlidingRotationalSpeed:true});
+    vehicle.addToWorld(this.world);this.rigs.push({body,vehicle});
+    body.addEventListener('collide',e=>{
+      const car=this.sim.cars[c.id],force=Math.abs(e.contact.getImpactVelocityAlongNormal());
+      if(force>4&&car.crashCooldown<=0){car.crashCooldown=.3;car.hits++;car.damage=clamp(car.damage+(force-4)*.7*(car.shield>0?.12:1),0,80);this.sim.emit(e.body.kind==='terrain'?'land':'crash',car,{force});}
+    });
+    this.place(c,{...c,y:this.track.groundHeight(c.x,c.z)+.70});
+  }
+  place(c,state){
+    Object.assign(c,state);const {body,vehicle}=this.rigs[c.id];
+    body.position.set(c.x,c.y,c.z);body.velocity.set(c.vx||0,c.vy||0,c.vz||0);
+    if(state.qw!==undefined)body.quaternion.set(c.qx,c.qy,c.qz,c.qw);else body.quaternion.setFromEuler(c.pitch||0,c.heading||0,c.roll||0,'YXZ');
+    body.angularVelocity.set(c.pitchV||0,c.yawRate||0,c.rollV||0);body.force.setZero();body.torque.setZero();
+    body.previousPosition.copy(body.position);body.interpolatedPosition.copy(body.position);body.previousQuaternion.copy(body.quaternion);body.interpolatedQuaternion.copy(body.quaternion);body.aabbNeedsUpdate=true;body.wakeUp();this.world.broadphase.dirty=true;
+    for(const w of vehicle.wheelInfos){w.suspensionLength=.34;w.suspensionRelativeVelocity=0;w.rotation=0;w.deltaRotation=0;w.engineForce=0;w.brake=0;w.steering=0;w.isInContact=false;w.raycastResult.reset();}
+    this.sync(c);
+  }
+  controls(c,dt){
+    const {body,vehicle}=this.rigs[c.id],i=c.finished?{throttle:0,brake:1,steer:0,drift:false,boost:false}:c.input;
+    for(const key of ['recoveryCooldown','crashCooldown','shield','boostTime'])c[key]=Math.max(0,(c[key]||0)-dt);
+    const forward=new CANNON.Vec3();body.vectorToWorldFrame(new CANNON.Vec3(0,0,1),forward);
+    const speed=body.velocity.dot(forward),boost=(i.boost&&c.boost>0&&i.throttle>0)||c.boostTime>0;
+    if(i.boost&&c.boost>0&&i.throttle>0)c.boost=Math.max(0,c.boost-dt*25);else c.boost=Math.min(100,c.boost+dt*3.3);
+    c.steer=lerp(c.steer,i.steer,1-Math.exp(-dt*9));
+    const steering=c.steer*(.53/(1+Math.abs(speed)*.026));
+    // Reverse requires holding brake once the car has come to a halt.
+    c.reverseTimer=i.brake>.5&&Math.abs(speed)<1?c.reverseTimer+dt:i.brake<=.5?0:c.reverseTimer;
+    const reverse=!c.finished&&i.brake>.5&&c.reverseTimer>.45&&speed<1;
+    const drive=i.throttle*(boost?6500:4300)*(1-c.damage*.004),reverseForce=reverse&&speed>-7?1900:0;
+    const grip=(c.id?DIFFICULTY[this.sim.options.difficulty].grip:1)*(Math.abs(c.lane)>14?.7:1);
+    vehicle.wheelInfos.forEach((w,j)=>{
+      vehicle.setSteeringValue(w.isFrontWheel?steering:0,j);
+      vehicle.applyEngineForce(reverse?reverseForce:-drive,j);
+      vehicle.setBrake(reverse?0:i.brake*80+(i.drift&&!w.isFrontWheel?18:0),j);
+      w.frictionSlip=grip*(i.drift?(w.isFrontWheel?1.6:.65):1.85);
+    });
+    const velocity=body.velocity.length(),drag=14+velocity*12;
+    body.applyForce(new CANNON.Vec3(-body.velocity.x*drag,0,-body.velocity.z*drag));
+    if(c.grounded){const down=new CANNON.Vec3();body.vectorToWorldFrame(new CANNON.Vec3(0,-Math.min(2400,velocity*velocity*1.4),0),down);body.applyForce(down);}
+  }
+  sync(c){
+    const {body,vehicle}=this.rigs[c.id],p=body.position,q=body.quaternion,v=body.velocity,omega=body.angularVelocity;
+    Object.assign(c,{x:p.x,y:p.y,z:p.z,vx:v.x,vy:v.y,vz:v.z,qx:q.x,qy:q.y,qz:q.z,qw:q.w,pitchV:omega.x,yawRate:omega.y,rollV:omega.z});
+    c.pitch=Math.asin(clamp(2*(q.w*q.x-q.y*q.z),-1,1));c.heading=Math.atan2(2*(q.x*q.z+q.w*q.y),1-2*(q.x*q.x+q.y*q.y));c.roll=Math.atan2(2*(q.x*q.y+q.w*q.z),1-2*(q.x*q.x+q.z*q.z));
+    c.wheelState=vehicle.wheelInfos.map(w=>({suspensionLength:w.suspensionLength,rotation:w.rotation,deltaRotation:w.deltaRotation,steering:w.steering,suspensionRelativeVelocity:w.suspensionRelativeVelocity}));
+    const n=this.track.nearest(c.x,c.z,c.s);c.s=n.s;c.lane=n.lane;
+  }
+  afterStep(c,dt){
+    const wasGrounded=c.grounded;this.sync(c);const {body,vehicle}=this.rigs[c.id];
+    c.grounded=vehicle.wheelInfos.some(w=>w.isInContact);
+    const up=new CANNON.Vec3();body.vectorToWorldFrame(new CANNON.Vec3(0,1,0),up);
+    const roof=up.y<-.35,bodyContact=this.world.contacts.some(contact=>contact.bi===body||contact.bj===body);
+    c.roofTime=roof&&bodyContact?c.roofTime+dt:0;if(c.roofTime>2.3)this.sim.recover(c,true);
+    if(c.grounded){if(!wasGrounded&&c.airTime>.18){c.maxAir=Math.max(c.maxAir,c.airTime);this.sim.emit('land',c,{air:c.airTime,force:Math.abs(c.vy)});}c.airTime=0;}else if(!bodyContact){c.airTime+=dt;c.totalAir+=dt;}
+    const side=new CANNON.Vec3();body.vectorToWorldFrame(new CANNON.Vec3(1,0,0),side);c.drift=Math.abs(body.velocity.dot(side));
+    const speed=Math.hypot(c.vx,c.vz);if(c.grounded&&c.input.drift&&speed>8&&c.drift>2)c.driftDistance+=speed*dt;
+    c.stuck=speed<2&&c.input.throttle>.5?c.stuck+dt:0;c.offTrackTime=Math.abs(c.lane)>22?c.offTrackTime+dt:0;
+    if((c.id&&c.stuck>5)||c.offTrackTime>3||c.y<-35)this.sim.recover(c,true);
+  }
+  step(dt){for(const c of this.sim.cars)this.controls(c,dt);this.world.step(dt);for(const c of this.sim.cars)this.afterStep(c,dt);}
+  restore(snapshot){
+    // Rebuild contact caches and subscriptions, then restore canonical rigid-body state.
+    for(const c of this.sim.cars){const state=snapshot.cars[c.id];this.place(c,state);Object.assign(c,JSON.parse(JSON.stringify(state)));const wheels=this.rigs[c.id].vehicle.wheelInfos;state.wheelState?.forEach((w,i)=>Object.assign(wheels[i],w));}
+    this.world.time=snapshot.time;this.world.stepnumber=snapshot.tick;
+  }
+}
 class RallySimulation {
   constructor(track,options={}){
     this.track=track;this.options={mode:'race',laps:1,difficulty:'intermediate',...options};this.time=0;this.tick=0;this.events=[];this.cars=[];this.finished=false;this.finishOrder=[];
@@ -74,14 +195,18 @@ class RallySimulation {
     const count=this.options.mode==='trial'?1:this.options.mode==='multiplayer'?clamp(Math.floor(this.options.playerCount)||1,1,6):6;
     for(let id=0;id<count;id++){
       const s=-8-Math.floor(id/2)*7,lane=count===1?0:(id%2===0?-3.5:3.5),p=track.at(s,lane);
-      this.cars.push({id,x:p.x,y:p.y+.68,z:p.z,vx:0,vy:0,vz:0,heading:p.heading,yawRate:0,pitch:0,roll:0,pitchV:0,rollV:0,s:wrap(s,track.length),lane,progress:s,lap:0,lapStart:0,lapTimes:[],nextGate:1,passedGates:0,grounded:true,roofTime:0,stuck:0,boost:100,boostTime:0,shield:0,damage:0,drift:0,airTime:0,totalAir:0,maxAir:0,driftDistance:0,gems:0,hits:0,finished:false,finishTime:null,steer:0,recoveryCooldown:0,achievements:[],input:{}});
+      this.cars.push({id,x:p.x,y:p.y+.68,z:p.z,vx:0,vy:0,vz:0,heading:p.heading,yawRate:0,pitch:0,roll:0,pitchV:0,rollV:0,s:wrap(s,track.length),lane,progress:s,lap:0,lapStart:0,lapTimes:[],nextGate:1,passedGates:0,grounded:true,roofTime:0,stuck:0,boost:100,boostTime:0,shield:0,damage:0,drift:0,airTime:0,totalAir:0,maxAir:0,driftDistance:0,gems:0,hits:0,finished:false,finishTime:null,steer:0,recoveryCooldown:0,crashCooldown:0,reverseTimer:0,offTrackTime:0,achievements:[],input:{}});
     }
+    this.physics=new CannonDrivingWorld(this);
   }
   emit(type,car,extra={}){this.events.push({type,id:car.id,...extra});}
   recover(c,automatic=false){
     if(c.recoveryCooldown>0&&!automatic)return;
-    const p=this.track.at(c.s,clamp(c.lane,-8,8));Object.assign(c,{x:p.x,y:p.y+1.1,z:p.z,heading:p.heading,vx:0,vy:0,vz:0,pitch:0,roll:0,pitchV:0,rollV:0,yawRate:0,roofTime:0,stuck:0,recoveryCooldown:2,damage:Math.max(0,c.damage-10)});this.emit('recover',c);
+    const p=this.track.at(c.s,clamp(c.lane,-8,8));
+    this.physics.place(c,{x:p.x,y:this.track.groundHeight(p.x,p.z)+1,z:p.z,heading:p.heading,vx:0,vy:0,vz:0,pitch:0,roll:0,pitchV:0,rollV:0,yawRate:0,roofTime:0,stuck:0,offTrackTime:0,reverseTimer:0,recoveryCooldown:2,damage:Math.max(0,c.damage-10)});
+    this.emit('recover',c);
   }
+  teleport(c,state){this.physics.place(c,state);}
   ai(c){
     const config=DIFFICULTY[this.options.difficulty],speed=Math.hypot(c.vx,c.vz),look=config.look+speed*.48;
     let lane=(c.id%3-1)*4;
@@ -98,80 +223,10 @@ class RallySimulation {
     if(this.finished)return;
     this.time+=dt;this.tick++;this.events.length=0;
     for(const p of this.pickups)p.cooldown=Math.max(0,p.cooldown-dt);
-    for(const c of this.cars){const raw=inputs[c.id]??(c.id===0||this.options.mode==='multiplayer'?{}:this.ai(c));c.input={throttle:clamp(Number(raw.throttle)||0,0,1),brake:clamp(Number(raw.brake)||0,0,1),steer:clamp(Number(raw.steer)||0,-1,1),drift:!!raw.drift,boost:!!raw.boost};if(raw.recover)this.recover(c);this.integrate(c,dt);}
-    for(let i=0;i<this.cars.length;i++)for(let j=i+1;j<this.cars.length;j++)this.collide(this.cars[i],this.cars[j]);
+    for(const c of this.cars){const raw=inputs[c.id]??(c.id===0||this.options.mode==='multiplayer'?{}:this.ai(c));c.input={throttle:clamp(Number(raw.throttle)||0,0,1),brake:clamp(Number(raw.brake)||0,0,1),steer:clamp(Number(raw.steer)||0,-1,1),drift:!!raw.drift,boost:!!raw.boost};if(raw.recover)this.recover(c);}
+    this.physics.step(dt);
     for(const c of this.cars){this.progress(c);this.collect(c);this.achievements(c);}
     if(this.cars[0].finished)this.finished=true;
-  }
-  integrate(c,dt){
-    const t=this.track,i=c.finished?{throttle:0,brake:1,steer:0}:c.input;
-    c.recoveryCooldown=Math.max(0,c.recoveryCooldown-dt);c.shield=Math.max(0,c.shield-dt);c.boostTime=Math.max(0,c.boostTime-dt);
-    const fx=Math.sin(c.heading),fz=Math.cos(c.heading),rx=fz,rz=-fx;
-    let forward=c.vx*fx+c.vz*fz,lateral=c.vx*rx+c.vz*rz;
-    const roof=Math.cos(c.roll)*Math.cos(c.pitch)<-.3;
-    c.steer=lerp(c.steer,i.steer,1-Math.exp(-dt*8));
-    const boost=(i.boost&&c.boost>0&&i.throttle>0)||c.boostTime>0;
-    if(i.boost&&c.boost>0&&i.throttle>0)c.boost=Math.max(0,c.boost-dt*25);else c.boost=Math.min(100,c.boost+dt*3.3);
-    if(c.grounded&&!roof){
-      const grip=(c.id?DIFFICULTY[this.options.difficulty].grip:1)*(i.drift?1.0:4.4);
-      const engine=i.throttle*(boost?25:15)*(1-c.damage*.004);
-      const brake=i.brake*(forward>1?25:8);
-      forward+=(engine-brake-.018*forward*Math.abs(forward)-.4*Math.sign(forward))*dt;
-      if(i.brake&&forward<0)forward=Math.max(-8,forward);
-      lateral*=Math.exp(-grip*dt);
-      const yawTarget=c.steer*forward/(7.5+Math.abs(forward)*.7)*(i.drift?1.45:1);
-      c.yawRate=lerp(c.yawRate,yawTarget,1-Math.exp(-dt*(i.drift?3:7)));
-      const front=t.surface(c.x+fx*1.5,c.z+fz*1.5,c.s).y,back=t.surface(c.x-fx*1.5,c.z-fz*1.5,c.s).y;
-      const right=t.surface(c.x+rx,c.z+rz,c.s).y,left=t.surface(c.x-rx,c.z-rz,c.s).y;
-      forward-=9.81*clamp((front-back)/3,-1,1)*dt;
-      if(c.finished)forward=Math.max(0,forward); // Finish braking must never become reverse throttle.
-      lateral-=9.81*clamp((right-left)/2,-1,1)*dt;
-      c.drift=Math.abs(lateral);if(i.drift&&Math.abs(forward)>8&&Math.abs(lateral)>2)c.driftDistance+=Math.abs(forward)*dt;
-    }else{c.yawRate*=Math.exp(-dt*.8);forward*=Math.exp(-dt*.018);lateral*=Math.exp(-dt*.018);}
-    c.heading=angle(c.heading+c.yawRate*dt);
-    c.vx=fx*forward+rx*lateral;c.vz=fz*forward+rz*lateral;
-    if(roof&&c.grounded){c.vx*=Math.exp(-dt*2.4);c.vz*=Math.exp(-dt*2.4);}
-    c.x+=c.vx*dt;c.z+=c.vz*dt;c.vy-=19*dt;c.y+=c.vy*dt;
-    const n=t.surface(c.x,c.z,c.s);c.s=n.s;c.lane=n.lane;
-    const half=t.width/2-1.25;
-    if(Math.abs(c.lane)>half){
-      const p=t.sample(c.s),sign=Math.sign(c.lane),nx=Math.cos(p.heading)*sign,nz=-Math.sin(p.heading)*sign,penetration=Math.abs(c.lane)-half;
-      c.x-=nx*penetration;c.z-=nz*penetration;c.lane=sign*half;
-      const impact=c.vx*nx+c.vz*nz;
-      if(impact>0){c.vx-=nx*impact*1.45;c.vz-=nz*impact*1.45;c.yawRate+=sign*impact*.018;if(impact>5){c.damage=clamp(c.damage+impact*.25*(c.shield>0?.15:1),0,80);if(impact>18&&c.shield<=0){c.rollV-=sign*impact*.27;c.vy=Math.max(c.vy,4.5);c.y+=.25;}if(c.recoveryCooldown<=0){this.emit('crash',c,{force:impact});c.recoveryCooldown=.25;}}}
-    }
-    const f2x=Math.sin(c.heading),f2z=Math.cos(c.heading),r2x=f2z,r2z=-f2x;
-    const heights=[];for(const a of [-1,1])for(const b of [-1,1])heights.push(t.surface(c.x+f2x*1.5*a+r2x*.96*b,c.z+f2z*1.5*a+r2z*.96*b,c.s).y);
-    const support=(heights[0]+heights[1]+heights[2]+heights[3])/4+(roof?1.04:.68);
-    const targetPitch=-Math.atan2((heights[2]+heights[3]-heights[0]-heights[1])*.5,3);
-    const targetRoll=Math.atan2((heights[1]+heights[3]-heights[0]-heights[2])*.5,1.92);
-    const groundVelocity=(c.vx*f2x+c.vz*f2z)*-Math.sin(targetPitch)+(c.vx*r2x+c.vz*r2z)*Math.sin(targetRoll);
-    const wasGrounded=c.grounded;c.grounded=c.y<=support+.075&&c.vy<=groundVelocity+1.1;
-    if(c.y<support){
-      const impact=groundVelocity-c.vy;c.y=support;c.grounded=true;
-      if(!wasGrounded&&c.airTime>.18){c.maxAir=Math.max(c.maxAir,c.airTime);this.emit('land',c,{air:c.airTime,force:impact});if(impact>15&&!roof){c.pitchV+=clamp(impact*.07,0,2);c.damage=clamp(c.damage+(impact-15)*.6,0,80);}}
-      c.vy=groundVelocity+(impact>7?impact*.10:0);
-    }
-    if(c.grounded){
-      if(roof){c.roofTime+=dt;c.rollV*=Math.exp(-dt*4);c.pitchV*=Math.exp(-dt*4);if(c.roofTime>2.3)this.recover(c,true);}
-      else{c.roofTime=0;c.pitchV+=(angle(targetPitch-c.pitch)*45-c.pitchV*10)*dt;c.rollV+=(angle(targetRoll-c.roll)*39-c.rollV*8)*dt;}
-      c.airTime=0;
-    }else{c.airTime+=dt;c.totalAir+=dt;c.pitchV*=Math.exp(-dt*.3);c.rollV*=Math.exp(-dt*.2);}
-    c.pitch=angle(c.pitch+c.pitchV*dt);c.roll=angle(c.roll+c.rollV*dt);
-    const speed=Math.hypot(c.vx,c.vz);c.stuck=speed<2&&i.throttle>.5?c.stuck+dt:0;if(c.id&&c.stuck>4)this.recover(c,true);
-  }
-  collide(a,b){
-    if(Math.abs(a.y-b.y)>1.8||Math.hypot(a.x-b.x,a.z-b.z)>5.1)return;
-    // Oriented rectangles, minimum-translation axis, then a mass-equivalent impulse.
-    const axes=[{x:Math.cos(a.heading),z:-Math.sin(a.heading)},{x:Math.sin(a.heading),z:Math.cos(a.heading)},{x:Math.cos(b.heading),z:-Math.sin(b.heading)},{x:Math.sin(b.heading),z:Math.cos(b.heading)}];
-    let depth=Infinity,normal;
-    const radius=(c,n)=>Math.abs(n.x*Math.cos(c.heading)-n.z*Math.sin(c.heading))*1.08+Math.abs(n.x*Math.sin(c.heading)+n.z*Math.cos(c.heading))*2.2;
-    for(const n of axes){const d=(b.x-a.x)*n.x+(b.z-a.z)*n.z,overlap=radius(a,n)+radius(b,n)-Math.abs(d);if(overlap<=0)return;if(overlap<depth){depth=overlap;normal={x:n.x*Math.sign(d||1),z:n.z*Math.sign(d||1)};}}
-    const nx=normal.x,nz=normal.z;a.x-=nx*depth*.51;a.z-=nz*depth*.51;b.x+=nx*depth*.51;b.z+=nz*depth*.51;
-    const relative=(b.vx-a.vx)*nx+(b.vz-a.vz)*nz;
-    if(relative<0){const impulse=-relative*.66;a.vx-=nx*impulse;a.vz-=nz*impulse;b.vx+=nx*impulse;b.vz+=nz*impulse;
-      for(const [c,sign] of [[a,-1],[b,1]]){c.yawRate+=sign*(nx*Math.cos(c.heading)-nz*Math.sin(c.heading))*impulse*.05;if(-relative>8){c.hits++;c.damage=clamp(c.damage+impulse*.7*(c.shield>0?.1:1),0,80);if(-relative>25&&c.shield<=0){c.rollV+=sign*5.5;c.vy+=4;c.y+=.2;}this.emit('crash',c,{force:-relative});}}
-    }
   }
   progress(c){
     if(c.finished)return;
@@ -189,13 +244,19 @@ class RallySimulation {
     if(p.kind==='gem'){c.boostTime=4;c.gems++;}if(p.kind==='nitro')c.boost=Math.min(100,c.boost+55);if(p.kind==='shield')c.shield=9;if(p.kind==='repair')c.damage=0;this.emit('pickup',c,{kind:p.kind});}}
   achievements(c){const checks=[['FIRST FLIGHT',c.maxAir>.6],['SIDEWAYS / 100 M',c.driftDistance>=100],['GEM HUNTER',c.gems>=3],['FLYING LOW',Math.hypot(c.vx,c.vz)*3.6>160],['CLEAN FINISH',c.finished&&c.damage<5]];for(const [name,yes]of checks)if(yes&&!c.achievements.includes(name)){c.achievements.push(name);this.emit('achievement',c,{name});}}
   standings(){return [...this.cars].sort((a,b)=>a.finished&&b.finished?a.finishTime-b.finishTime:a.finished?-1:b.finished?1:b.progress-a.progress);}
-  snapshot(){return {tick:this.tick,time:this.time,cars:this.cars.map(c=>({...c,input:{...c.input},lapTimes:[...c.lapTimes],achievements:[...c.achievements]})),pickups:this.pickups.map(p=>({...p})),finished:this.finished,finishOrder:[...this.finishOrder]};}
-  restore(s){this.tick=s.tick;this.time=s.time;this.cars=s.cars.map(c=>({...c,input:{...c.input},lapTimes:[...c.lapTimes],achievements:[...c.achievements]}));this.pickups=s.pickups.map(p=>({...p}));this.finished=s.finished;this.finishOrder=[...s.finishOrder];this.events=[];}
+  snapshot(){return JSON.parse(JSON.stringify({version:TRACK_VERSION,options:this.options,tick:this.tick,time:this.time,cars:this.cars,pickups:this.pickups,finished:this.finished,finishOrder:this.finishOrder}));}
+  restore(s){
+    if(s.version!==TRACK_VERSION||s.cars.length!==this.cars.length)throw new Error('Incompatible physics snapshot');
+    const state=JSON.parse(JSON.stringify(s));this.tick=state.tick;this.time=state.time;this.options=state.options;this.cars=state.cars;this.pickups=state.pickups;this.finished=state.finished;this.finishOrder=state.finishOrder;this.events=[];
+    this.physics=new CannonDrivingWorld(this);this.physics.restore(s);
+  }
+
 }
 // SIMULATION_CORE_END
 
 const $=id=>document.getElementById(id);
 const track=new DirtTrack();
+track.buildCollider();
 const settings={mode:'race',laps:1,difficulty:'intermediate',color:0};
 let sim,phase='menu',cameraMode=0,accumulator=0,lastTime=0,countdown=3.3,toastTimer=0,renderTime=0,hudTimer=0;
 let recording=[],lastReplay=null,replayTime=0,replayRate=1,ghostData=null,recordTimer=0,replayPaused=false,replayMenuSettings=null,cachedBestTime=null;
@@ -228,7 +289,7 @@ const dirtTex=texture('dirt'),grassTex=texture('grass'),rockTex=texture('rock'),
 const mats={dirt:new THREE.MeshStandardMaterial({map:dirtTex,bumpMap:dirtTex,bumpScale:.16,roughness:1}),grass:new THREE.MeshStandardMaterial({map:grassTex,roughness:1,vertexColors:true}),rock:new THREE.MeshStandardMaterial({map:rockTex,roughness:1}),barrier:new THREE.MeshStandardMaterial({color:'#d6c7a5',map:rockTex,roughness:.95}),rubber:new THREE.MeshStandardMaterial({map:rubberTex,color:'#8d9388',roughness:1}),metal:new THREE.MeshStandardMaterial({color:'#aab4ad',metalness:.7,roughness:.37}),black:new THREE.MeshStandardMaterial({color:'#18231f',roughness:.7}),glass:new THREE.MeshPhysicalMaterial({color:'#7aabaa',metalness:.15,roughness:.12,transparent:true,opacity:.43,depthWrite:false}),bark:new THREE.MeshStandardMaterial({map:barkTex,roughness:1})};
 function mesh(geo,mat,parent=scene){const m=new THREE.Mesh(geo,mat);m.castShadow=true;m.receiveShadow=true;parent.add(m);return m;}
 function box(w,h,d,mat,x=0,y=0,z=0,parent=scene){const m=mesh(new THREE.BoxGeometry(w,h,d),mat,parent);m.position.set(x,y,z);return m;}
-function roadGeometry(){const pos=[],uv=[],indices=[],across=28;for(let i=0;i<=track.count;i++){const s=i*track.step;for(let j=0;j<=across;j++){const lane=(j/across-.5)*track.width,p=track.at(s,lane);pos.push(p.x,p.y,p.z);uv.push(j/across*4,s/9);if(i<track.count&&j<across){const a=i*(across+1)+j,b=a+across+1;indices.push(a,b,a+1,b,b+1,a+1);}}}const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));g.setIndex(indices);g.computeVertexNormals();return g;}
+function roadGeometry(){const pos=[],uv=[],indices=[],across=28;for(let i=0;i<=track.count;i++){const s=i*track.step;for(let j=0;j<=across;j++){const lane=(j/across-.5)*track.width,p=track.at(s,lane);pos.push(p.x,track.groundHeight(p.x,p.z),p.z);uv.push(j/across*4,s/9);if(i<track.count&&j<across){const a=i*(across+1)+j,b=a+across+1;indices.push(a,b,a+1,b,b+1,a+1);}}}const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));g.setIndex(indices);g.computeVertexNormals();return g;}
 mesh(roadGeometry(),mats.dirt).castShadow=false;
 function landscapeHeight(x,z){return -3+8*Math.sin(x*.014)*Math.cos(z*.009)+3*Math.sin(z*.03+x*.009);}
 function buildLandscape(){
@@ -354,7 +415,7 @@ $('watch-menu').onclick=watchReplay;$('exit-replay').onclick=backToMenu;$('repla
 function framePair(frames,t){let lo=0,hi=frames.length-1;while(lo<hi-1){const mid=(lo+hi)>>1;if(frames[mid][0]<=t)lo=mid;else hi=mid;}const a=frames[lo],b=frames[Math.min(lo+1,frames.length-1)];return {a,b,f:clamp((t-a[0])/Math.max(.001,b[0]-a[0]),0,1)};}
 function transformFrame(object,a,b,f,offset){object.position.set(lerp(a[offset],b[offset],f),lerp(a[offset+1],b[offset+1],f),lerp(a[offset+2],b[offset+2],f));object.rotation.set(a[offset+4]+angle(b[offset+4]-a[offset+4])*f,a[offset+3]+angle(b[offset+3]-a[offset+3])*f,a[offset+5]+angle(b[offset+5]-a[offset+5])*f,'YXZ');}
 function renderReplay(dt){replayTime=Math.min(lastReplay.duration,replayTime+(replayPaused?0:dt*replayRate));const {a,b,f}=framePair(lastReplay.frames,replayTime);sim.time=replayTime;sim.cars.forEach((c,i)=>{const o=1+i*9;transformFrame(carMeshes[i],a,b,f,o);c.x=carMeshes[i].position.x;c.y=carMeshes[i].position.y;c.z=carMeshes[i].position.z;c.heading=carMeshes[i].rotation.y;c.vx=Math.sin(c.heading)*lerp(a[o+6],b[o+6],f);c.vz=Math.cos(c.heading)*lerp(a[o+6],b[o+6],f);c.lap=a[o+7];c.finished=c.lap>=settings.laps;if(c.finished&&c.finishTime===null)c.finishTime=replayTime;if(!c.finished)c.finishTime=null;c.progress=lerp(a[o+8],b[o+8],f);c.s=track.nearest(c.x,c.z,c.s).s;for(const w of carMeshes[i].userData.wheels){w.tire.rotation.x=c.progress*2;w.hub.rotation.x=c.progress*2;}});$('replay-scrub').value=replayTime/lastReplay.duration*1000;}
-function updateCarMeshes(){for(const c of sim.cars){const m=carMeshes[c.id];m.position.set(c.x,c.y,c.z);m.rotation.set(c.pitch,c.heading,c.roll,'YXZ');for(const w of m.userData.wheels){w.pivot.rotation.y=w.front?c.steer*.42:0;w.tire.rotation.x=c.progress*2;w.hub.rotation.x=c.progress*2;}m.userData.steering.rotation.z=-c.steer*.7;}}
+function updateCarMeshes(){for(const c of sim.cars){const m=carMeshes[c.id];m.position.set(c.x,c.y,c.z);m.quaternion.set(c.qx,c.qy,c.qz,c.qw);for(const [j,w]of m.userData.wheels.entries()){const state=c.wheelState[j];w.pivot.position.y=.1-state.suspensionLength;w.pivot.rotation.set(state.rotation,state.steering,0,'YXZ');}m.userData.steering.rotation.z=-c.steer*.7;}}
 const lookTarget=new THREE.Vector3(),desiredCamera=new THREE.Vector3();
 function updateCamera(dt,snap=false){
   const c=sim.cars[0];
