@@ -4,7 +4,7 @@ The initial release is single-player. This is the next implementation boundary, 
 
 ## Shared simulation
 
-The `SIMULATION_CORE_BEGIN` / `SIMULATION_CORE_END` block in `script.js` contains `DirtTrack` and `RallySimulation`. It has no dependency on Three.js, the DOM, audio, storage, wall clocks or networking. Tests execute this same block.
+The `SIMULATION_CORE_BEGIN` / `SIMULATION_CORE_END` block in `script.js` contains `DirtTrack` and `RallySimulation`. It depends on pinned cannon-es 0.20.0, with no dependency on Three.js, the DOM, audio, storage, wall clocks or networking. Tests execute this same block.
 
 Extract it to a shared ES module when adding the server, then bundle it into `script.js` for the three-file CodePen distribution. Do not maintain two copies of the physics.
 
@@ -22,7 +22,7 @@ const snapshot = simulation.snapshot();
 simulation.restore(snapshot);
 ```
 
-Missing inputs in multiplayer mode are neutral and never invoke AI. Snapshots include velocities, angular state, checkpoint progress, damage, pickups, timers and finish order.
+Missing inputs in multiplayer mode are neutral and never invoke AI. Snapshots include Cannon position/quaternion, linear and angular velocities, wheel/suspension state, checkpoint progress, damage, pickups, timers and finish order. Restoration updates world-space inertia and reconstructs contact caches. All human slots use identical tire parameters; AI difficulty bonuses do not leak into multiplayer. The current restore method rebuilds the world for correctness; optimize that path before running frequent client reconciliation. Do not assume bit-identical floating-point results across different browsers or hardware: the server remains authoritative.
 
 ## Authoritative server
 
@@ -42,7 +42,7 @@ Validate finite input values, clamp controls, reject oversized messages and stal
 
 Start with physics at 120 Hz and snapshots at 20 Hz. Predict the local player immediately; reconcile acknowledged inputs against snapshots and interpolate remote cars with an approximately 100 ms buffer. Measure CPU, latency and bandwidth before adjusting rates. Rendering runs independently of the server loop.
 
-Reserve disconnected human slots for a short reconnect grace period, then retire the car without inserting AI. Late joiners should spectate after the countdown. Add room-level lobby, ready, countdown and result states. The single-player core currently stops when car 0 finishes: replace that ending condition for multiplayer with all human finishers or a timeout after the winner.
+Reserve disconnected human slots for a short reconnect grace period, then retire the car without inserting AI. Late joiners should spectate after the countdown. Add room-level lobby, ready, countdown and result states. The simulation continues until every car has finished; the player result is independent of the remaining field. Add a room timeout and explicit retirement rules for disconnected humans so a room cannot wait forever.
 
 ## Railway deployment
 

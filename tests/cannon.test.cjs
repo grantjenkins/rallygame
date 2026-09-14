@@ -90,12 +90,12 @@ test('recovery across the moguls clears the chassis and lets the car drive away'
   }
 });
 
-test('all three ramp launches collect gems and land level with forward momentum',()=>{
-  for(const r of track.ramps){
+test('all three ramp launches at original and 5% higher approach speeds land level with momentum',()=>{
+  for(const approach of [26,27.3])for(const r of track.ramps){
     const s=new RallySimulation(track,{mode:'trial'}),c=s.cars[0],p=track.at(r.s-40,r.lane);
-    s.teleport(c,{x:p.x,y:track.groundHeight(p.x,p.z)+.8,z:p.z,heading:p.heading,vx:Math.sin(p.heading)*26,vz:Math.cos(p.heading)*26});
+    s.teleport(c,{x:p.x,y:track.groundHeight(p.x,p.z)+.8,z:p.z,heading:p.heading,vx:Math.sin(p.heading)*approach,vz:Math.cos(p.heading)*approach});
     let airborne=false,landed=false;
-    for(let i=0;i<6/DT;i++){s.step({0:s.ai(c)});if(c.airTime>.15)airborne=true;if(airborne&&c.grounded){assert.ok(Math.abs(c.pitch)<.25,`nose-first landing ${c.pitch}`);assert.ok(Math.hypot(c.vx,c.vz)>14);landed=true;break;}}
+    for(let i=0;i<6/DT;i++){s.step({0:s.ai(c)});if(c.airTime>.15&&track.delta(c.s,r.s)>-2)airborne=true;if(airborne&&c.grounded){assert.ok(Math.abs(c.pitch)<.25,`nose-first landing ${c.pitch}`);assert.ok(Math.hypot(c.vx,c.vz)>14);landed=true;break;}}
     assert.ok(landed);assert.ok(c.gems>0);
     for(let i=0;i<120;i++){s.step({0:s.ai(c)});assert.ok(Math.hypot(c.vx,c.vz)>14,'lost momentum after touchdown');}assert.equal(c.hits,0);
   }

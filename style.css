@@ -17,3 +17,11 @@ body.result-open .modal h2{font-size:42px;margin:9px 0 12px}body.result-open .mo
 body.result-open .modal p{font-size:11px;margin:10px 0}body.result-open .result-row{font-size:11px;padding:7px 0}
 body.result-open #touch-controls{display:none!important}
 @media(max-width:800px){body.result-open .modal{top:160px;right:4%;width:205px}body.result-open .modal>section{padding:12px}body.result-open .modal h2{font-size:32px}body.result-open .modal .result-row:not(:first-child){display:none}body.result-open .modal p{font-size:10px}}
+
+@media(max-width:800px){
+ body.result-open .modal{top:auto;bottom:76px;left:4%;right:4%;width:auto}
+ body.result-open #modal-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+ body.result-open .modal button{margin:0;padding:9px 5px;font-size:9px}
+ body.result-open .telemetry,body.result-open .minimap,body.result-open .drive-tools{display:none}
+ body.result-open .modal p{margin:6px 0}
+}

@@ -11,8 +11,21 @@ button('QA: drive session',()=>{
 button('QA: roof',()=>{const d=window.RallyDebug,c=d.sim.cars[0];d.sim.teleport(c,{roll:Math.PI,pitch:0,rollV:0,pitchV:0,vx:0,vz:0,vy:0,y:d.track.groundHeight(c.x,c.z)+1.1});});
 button('QA: inspect jump',()=>{const d=window.RallyDebug,c=d.sim.cars[0],r=d.track.ramps[0],p=d.track.at(r.s-24,r.lane);d.sim.teleport(c,{x:p.x,y:d.track.groundHeight(p.x,p.z)+.7,z:p.z,s:r.s-24,lane:r.lane,heading:p.heading,vx:Math.sin(p.heading)*29,vz:Math.cos(p.heading)*29,vy:0});});
 
-button('QA: report',()=>{const d=window.RallyDebug;status.textContent=d.sim.cars.length+' cars / '+(d.ghostReady?'ghost loaded':'no ghost')+' / '+d.phase+' / CANNON '+d.sim.physics.world.bodies.length+' bodies';});
+button('QA: report',()=>{const d=window.RallyDebug;status.textContent=d.sim.cars.length+' cars / '+(d.ghostReady?'ghost loaded':'no ghost')+' / '+d.phase+' / CANNON '+d.sim.physics.world.bodies.length+' bodies / recording '+(d.lastReplay?.duration?.toFixed(3)||'none')+'s';});
 
 button('QA: car front',()=>window.RallyDebug.inspectCar(1));
 button('QA: car rear',()=>window.RallyDebug.inspectCar(-1));
 button('QA: finish player',()=>{const d=window.RallyDebug,c=d.sim.cars[0];c.finished=true;c.finishTime=d.sim.time;c.lap=d.settings.laps;c.progress=c.lap*d.track.length;d.sim.finishOrder.push(0);d.finishRace();});
+
+button('QA: ramp view',()=>window.RallyDebug.inspectRamp());
+button('QA: stripe front',()=>window.RallyDebug.inspectTerrain(0,1,-24,7));
+button('QA: stripe rear',()=>window.RallyDebug.inspectTerrain(0,-1,24,5));
+button('QA: stripe above',()=>window.RallyDebug.inspectTerrain(0,1,-1,36,1));
+button('QA: left pole',()=>window.RallyDebug.inspectTerrain(0,-1,-5,2,22));
+button('QA: right pole',()=>window.RallyDebug.inspectTerrain(0,1,5,2,22));
+for(const [label,score]of [
+  ['flat',p=>-Math.abs(p.bank)-Math.abs(window.RallyDebug.track.centerHeight(p.s+3)-window.RallyDebug.track.centerHeight(p.s-3))],
+  ['uphill',p=>window.RallyDebug.track.height(p.s+3,14)-window.RallyDebug.track.height(p.s-3,14)],
+  ['downhill',p=>window.RallyDebug.track.height(p.s-3,14)-window.RallyDebug.track.height(p.s+3,14)],
+  ['bank',p=>Math.abs(p.bank)],['curve',p=>Math.abs(p.curve)]
+])button('QA: barrier '+label,()=>{const d=window.RallyDebug,p=d.track.points.reduce((a,b)=>score(a)>score(b)?a:b);d.inspectTerrain(p.s,1,-18,5,5);status.textContent=label+' at '+p.s.toFixed(1)+' m';});
